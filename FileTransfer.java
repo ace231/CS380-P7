@@ -22,26 +22,8 @@ public class FileTransfer {
             System.out.println("PLEASE PROVIDE SOME INPUT");
         } else if(args[0].toLowerCase().equals("makekeys")) {
             
-            try {
-                KeyPairGenerator gen = KeyPairGenerator.getInstance("RSA");
-                gen.initialize(4096); // you can use 2048 for faster key generation
-
-                KeyPair keyPair = gen.genKeyPair();
-                PrivateKey privateKey = keyPair.getPrivate();
-                PublicKey publicKey = keyPair.getPublic();
-                
-                try (ObjectOutputStream oos = new ObjectOutputStream(new FileOutputStream(new File("public.bin")))) {
-                    oos.writeObject(publicKey);
-                }
-                
-                try (ObjectOutputStream oos = new ObjectOutputStream(new FileOutputStream(new File("private.bin")))) {
-                    oos.writeObject(privateKey);
-                }
-                
-            } catch (NoSuchAlgorithmException | IOException e) {
-                e.printStackTrace(System.err);
-            }
-                
+            genKeys();
+            
         } else if(args[0].toLowerCase().equals("server")) {
             
             if(args.length != 3) {
@@ -59,6 +41,28 @@ public class FileTransfer {
         }
             
     } // End of main
+    
+    
+    private static void genKeys() {
+        try {
+            KeyPairGenerator gen = KeyPairGenerator.getInstance("RSA");
+            gen.initialize(4096); // you can use 2048 for faster key generation
+            KeyPair keyPair = gen.genKeyPair();
+            PrivateKey privateKey = keyPair.getPrivate();
+            PublicKey publicKey = keyPair.getPublic();
+                
+            try (ObjectOutputStream oos = new ObjectOutputStream(new FileOutputStream(new File("public.bin")))) {
+                oos.writeObject(publicKey);
+            }
+            
+            try (ObjectOutputStream oos = new ObjectOutputStream(new FileOutputStream(new File("private.bin")))) {
+                oos.writeObject(privateKey);
+            }
+                
+        } catch (NoSuchAlgorithmException | IOException e) {
+            e.printStackTrace(System.err);
+        }
+    }
     
     
     private static void client(String[] args) {
