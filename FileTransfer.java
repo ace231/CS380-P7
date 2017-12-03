@@ -72,16 +72,49 @@ public class FileTransfer {
     }
     
     
+    // Method that handles client functionality
     private static void client(String[] args) {
+        String pubKeyFilename = args[1];
+        String hostName = args[2];
+        int port = -1;
+        try {
+            port = Integer.parseInt(args[3]);
+        }catch(NumberFormatException e) {
+            System.out.println("Last parameter for client should be an integer");
+            e.printStackTrace();
+            return;
+        }
+        
+        // First generate AES session key
+        KeyGenerator keyGen = KeyGenerator.getInstance("AES");
+        keyGen.init(128);
+        Key sessionKey = keyGen.generateKey();
+        
+        // Encrypt session key with server's public key
+        
+        // Prompt user for file to transfer
+        
+        // Check path and ask for chunk size IN BYTES (default 1024)
+        
+        // Send server StartMessage with file name, length of file in bytes, chunk size, and encrypted
+        // session key
+        
+        // Check for AckMessage, if sequence number = 0, proceed; if sequence number = -1, something's wrong
+        // just quit
+        
+        // Loop and send each chunk of the file in order.
+            // 
+        
         
     } // End of client
     
     
+    // Method that handles server functionality
     private static void server(String[] args) throws Exception{
-        // Initializing rsa and aes ciphers, session key, and crc32
+        // Initializing rsa and aes ciphers, session key, crc32, and tons of stuff
         Cipher rsaCipher = Cipher.getInstance("RSA");
         Cipher aesCipher = Cipher.getInstance("AES");
-		CRC32 checkCrc = new CRC32();
+        CRC32 checkCrc = new CRC32();
         int numChunks = 0, nxtSeq = -1; // -1 is a flag for an unsuccessful start message setup
         Key sessionKey = null;
         String fileName = "";
@@ -145,11 +178,13 @@ public class FileTransfer {
                     System.out.println("Private key could not be found...");
                     e.printStackTrace();
                     obOut.writeObject(new AckMessage(-1));
+                    break;
                 }catch(Exception e){
                     // Or anything else happened
                     System.out.println("Yeah, so something went wrong...");
                     e.printStackTrace();
                     obOut.writeObject(new AckMessage(-1));
+                    break;
                 }
                 
                 // If everything else successful,FileOutputStream can be created
@@ -167,6 +202,7 @@ public class FileTransfer {
                 obOut.close();
                 obOut.writeObject(new AckMessage(-1));
                 nxtSeq = -1;
+                break;
                 // End of if clientMsg is a STOP message
                 
             }else if(clientMsg.getType().equals(MessageType.CHUNK)) {
@@ -202,12 +238,10 @@ public class FileTransfer {
                     System.out.println("Transfer complete");
                     break;
                 }
-                // End of if clientMsg is a CHUNK message
+                
+            } // End of if clientMsg is a CHUNK message
             
-            }
-            
-            
-        }
+        } // End of while loop
         
     } // End of server
     
