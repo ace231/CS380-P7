@@ -29,7 +29,12 @@ public class FileTransfer {
             if(args.length != 3) {
                 System.out.println("Incorrect number of parameters for server function detected, please try again.");
             } else {
-                server(args);
+                try {
+                    server(args);
+                }catch(Exception e) {
+                    System.out.println("Something went wrong...");
+                    e.printStackTrace();
+                }
             }
             
         }  else if(args[0].toLowerCase().equals("client")) {// End of if args[0] = server
@@ -62,6 +67,8 @@ public class FileTransfer {
         } catch (NoSuchAlgorithmException | IOException e) {
             e.printStackTrace(System.err);
         }
+        
+        System.out.println("Keys dumped into \"public.bin\" and \"private.bin\"");
     }
     
     
@@ -70,22 +77,139 @@ public class FileTransfer {
     } // End of client
     
     
-    private static void server(String[] args) {
-        String pubKeyFilename = args[1];
-        int port;
+    private static void server(String[] args) throws Exception{
+        // Initializing rsa and aes ciphers, session key, and crc32
+        Cipher rsaCipher = Cipher.getInstance("RSA");
+        Cipher aesCipher = Cipher.getInstance("AES");
+		CRC32 checkCrc = new CRC32();
+        int numChunks = 0, nxtSeq = -1; // -1 is a flag for an unsuccessful start message setup
+        Key sessionKey = null;
+        String fileName = "";
+        FileOutputStream fileOut = null;
+        
+        String privKeyFilename = args[1];
+        int port = -1;
         try {
             port = Integer.parseInt(args[2]);
         } catch(NumberFormatException e) {
             System.out.println("Second argument to server function should be an integer...");
+            return;
         }
         
+        // Creating server and client socket
         ServerSocket serverSocker = new ServerSocket(port);
+        Socket clientSocket = serverSocker.accept();
+            
+        // Creating client input and output streams
+        InputStream is = clientSocket.getInputStream();
+        OutputStream os = clientSocket.getOutputStream();
+        ObjectInputStream obIn = new ObjectInputStream(is);
+        ObjectOutputStream obOut = new ObjectOutputStream(os);
         
-        while(true) {
-            Socket clientSocket = serverSocker.accept();
-
+        while(true) {    
+            // Reading message from client
+            Message clientMsg = (Message)obIn.readObject();
+            
+            if(clientMsg.getType().equals(MessageType.DISCONNECT)) {
+                System.out.println("Disconnecting...");
+                clientSocket.close();
+                obIn.close();
+                obOut.close();
+                // End of if clientMsg is a DISCONNECT Message
+                
+            } else if(clientMsg.getType().equals(MessageType.START)) {
+                StartMessage startMsg = (StartMessage) clientMsg;
+                int fileSize = (int)startMsg.getSize();
+                int chunkSize = (int)startMsg.getSize();
+                numChunks = (int)Math.ceil((double) fileSize / (double) chunkSize);
+                fileName = startMsg.getFile();
+                
+                try{
+                    // Received client's AES key
+                    byte[] clientKey = startMsg.getEncryptedKey();
+                    
+                    // Retrieving server private key
+                    File privKeyFile = new File(privKeyFilename);
+                    ObjectInputStream privKeyStream = new ObjectInputStream(new FileInputStream(privKeyFile));
+                    PrivateKey privKey = (PrivateKey) privKeyStream.readObject();
+                    
+                    // Decrypting session key from client
+                    rsaCipher.init(Cipher.UNWRAP_MODE, privKey); // Getting private key ready
+                    sessionKey = rsaCipher.unwrap(clientKey, "AES", Cipher.SECRET_KEY);
+                    
+                    // (hopefully) successful setup so next sequence number should be 0
+                    nxtSeq = 0;
+                    privKeyStream.close();
+                }catch(FileNotFoundException e) {
+                    // Maybe private key could not be found
+                    System.out.println("Private key could not be found...");
+                    e.printStackTrace();
+                    obOut.writeObject(new AckMessage(-1));
+                }catch(Exception e){
+                    // Or anything else happened
+                    System.out.println("Yeah, so something went wrong...");
+                    e.printStackTrace();
+                    obOut.writeObject(new AckMessage(-1));
+                }
+                
+                // If everything else successful,FileOutputStream can be created
+                String[] temp = fileName.split("."); // Ex. test.txt -> "test" "." "txt"
+                String newFilename = temp[0] + "(2)" + temp[1] + temp[2];
+                fileOut = new FileOutputStream(new File(newFilename));
+                
+                obOut.writeObject(new AckMessage(0));
+                // End of if clientMst is a START Message
+                
+            }else if(clientMsg.getType().equals(MessageType.STOP)) {
+                System.out.println("STOP message received, stopping file transfer...");
+                clientSocket.close();
+                obIn.close();
+                obOut.close();
+                obOut.writeObject(new AckMessage(-1));
+                nxtSeq = -1;
+                // End of if clientMsg is a STOP message
+                
+            }else if(clientMsg.getType().equals(MessageType.CHUNK)) {
+                Chunk clientChunk = (Chunk) clientMsg;
+                // Check sequence number of chunk
+                if(clientChunk.getSeq() == nxtSeq) {
+                    
+                    // Decrypt data using session key
+                    aesCipher.init(Cipher.DECRYPT_MODE, sessionKey);
+                    byte[] decData = aesCipher.doFinal(clientChunk.getData());
+                    
+                    // Compare CRC32 generated from data and that sent from client
+                    int cliCode = clientChunk.getCrc();
+                    checkCrc.update(decData);
+                    
+                    // If values match, store data
+                    if((int)checkCrc.getValue() == cliCode) {
+                        fileOut.write(decData);
+                    }
+                    checkCrc.reset();
+                    
+                    // Print status
+                    System.out.printf("Chunk received [%d/%d]", clientChunk.getSeq(), numChunks);
+                    
+                    // Last step is to expect next sequence number and send Ack to client
+                    nxtSeq++;
+                    obOut.writeObject(nxtSeq);
+                }
+                
+                if(clientChunk.getSeq() == numChunks) {
+                    fileOut.close();
+                    clientSocket.close();
+                    System.out.println("Transfer complete");
+                    break;
+                }
+                // End of if clientMsg is a CHUNK message
+            
+            }
+            
+            
         }
         
     } // End of server
+    
     
  } // End of FileTranser
