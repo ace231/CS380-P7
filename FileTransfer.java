@@ -1,3 +1,11 @@
+/*****************************************
+*   Alfredo Ceballos
+*   CS 380 - Computer Networks
+*   Project 7
+*   Professor Nima Davarpanah
+*****************************************/
+
+
 import java.io.*;
 import java.util.*;
 import java.util.zip.CRC32;
