@@ -39,9 +39,14 @@ public class FileTransfer {
             
         }  else if(args[0].toLowerCase().equals("client")) {// End of if args[0] = server
             if(args.length != 4) {
-                System.out.println("Incorrecto number of parameters for client function...");
+                System.out.println("Incorrect number of parameters for client function...");
             } else {
-                client(args);
+                try {
+                    client(args);
+                }catch(Exception e) {
+                    System.out.println("Something went wrong in client function...");
+                    e.printStackTrace();
+                }
             }
         }
             
@@ -73,10 +78,14 @@ public class FileTransfer {
     
     
     // Method that handles client functionality
-    private static void client(String[] args) {
+    private static void client(String[] args) throws Exception {
         String pubKeyFilename = args[1];
         String hostName = args[2];
+        ObjectInputStream obIn = null;
+        ObjectOutputStream obOut = null;
         int port = -1;
+        Socket socket;
+        
         try {
             port = Integer.parseInt(args[3]);
         }catch(NumberFormatException e) {
@@ -85,26 +94,131 @@ public class FileTransfer {
             return;
         }
         
+        socket = new Socket(hostName, port);
+        InputStream is = socket.getInputStream();
+        OutputStream os = socket.getOutputStream();
+        obIn = new ObjectInputStream(is);
+        obOut = new ObjectOutputStream(os);
+        System.out.printf("Connection made with %s", socket.getInetAddress().getHostName());
+        
         // First generate AES session key
         KeyGenerator keyGen = KeyGenerator.getInstance("AES");
         keyGen.init(128);
         Key sessionKey = keyGen.generateKey();
+        byte[] encSessionKey = null;
         
-        // Encrypt session key with server's public key
+        try{        
+            // Fetching server public key
+            File pubKeyFile = new File(pubKeyFilename);
+            ObjectInputStream pubKeyStream = new ObjectInputStream(new FileInputStream(pubKeyFile));
+            PublicKey pubKey = (PublicKey)pubKeyStream.readObject();
+            
+            // Encrypt session key with server's public key
+            Cipher rsaCipher = Cipher.getInstance("RSA");
+            rsaCipher.init(Cipher.WRAP_MODE, pubKey);
+            encSessionKey = rsaCipher.wrap(sessionKey);
+            
+        }catch(FileNotFoundException e) {
+            System.out.println("The server's public key could not be found...");
+            e.printStackTrace();
+            return;
+        }
+                
+        // Prompt user for file to transfer, check path, and ask for 
+        // chunk size IN BYTES (default 1024)
+        Scanner keyboard = new Scanner(System.in);
+        String fileName = null;
+        File file = null;
+        while(!file.exists()) {
+            System.out.print("Enter path: ");
+            fileName = keyboard.nextLine();
+            file = new File(fileName);
+        }
+        keyboard.reset();
         
-        // Prompt user for file to transfer
+        // Asking and validating for chunk size
+        int chunkSize = 0;
+        while(chunkSize == 0) {
+            try{
+                System.out.print("Enter chunk size in bytes (default is 1024): ");
+                chunkSize = keyboard.nextInt();
+                if(chunkSize < 1024) {
+                    System.out.println("Chunk size should be equal or greater to 1024");
+                    chunkSize = 0;
+                    continue;
+                }
+            }catch(InputMismatchException e){
+                System.out.println("That wasn't a number, try again...");
+            }
+        }
         
-        // Check path and ask for chunk size IN BYTES (default 1024)
-        
-        // Send server StartMessage with file name, length of file in bytes, chunk size, and encrypted
-        // session key
+        // Send server StartMessage with file name, chunk size, and encrypted session key
+        StartMessage startMsg = new StartMessage(fileName, encSessionKey, chunkSize);
+        obOut.writeObject(startMsg);
         
         // Check for AckMessage, if sequence number = 0, proceed; if sequence number = -1, something's wrong
         // just quit
+        Message serverMsg = (Message) obIn.readObject();
+        int seqNum = -1;
+        if(serverMsg.getType().equals(MessageType.ACK)) {
+            AckMessage ackMsg = (AckMessage)serverMsg;
+            if(ackMsg.getSeq() == -1) {
+                System.out.println("Server cannot initiate transfer right now...");
+                socket.close();
+                return;
+            } else if(ackMsg.getSeq() == 0){
+                seqNum = ackMsg.getSeq();
+                System.out.println("Transfer can begin...");
+                System.out.printf("Sending: %s    File size: %d.%n", fileName, file.length());
+            }
+        }
+        
+        // Figuring out details for file transfer. We already check to see if file exists,
+        // so load the whole thing to make it easy
+        int fileSize = (int) file.length();
+        int numChunks = (int) Math.ceil((double) fileSize / (double) chunkSize);
+        int counter = 0;
+        int nxtSeq = 0;
+        byte[] fileData = Files.readAllBytes(file.toPath());
+        byte[] chunk = new byte[chunkSize];
+        System.out.printf("Sending %d chunks.%n", numChunks);
+        CRC32 crc = new CRC32();
+        Cipher cipher = Cipher.getInstance("AES");
+        AckMessage ackMsg = null;
         
         // Loop and send each chunk of the file in order.
-            // 
-        
+        while(seqNum < numChunks) {
+            if(seqNum == nxtSeq){
+                // Remember file already loaded into "file"
+                // Loop in charge of fitting bytes from the file into chunks
+                for(int i = 0; i < chunkSize; i++) {
+                    
+                    // If the end of the file is reached before the chunk is filled,
+                    // pad with 0's and break
+                    if(counter == fileData.length) {
+                        chunk[i] = 0;
+                    } else {
+                    chunk[i] = fileData[i + counter];
+                    counter += i;
+                    }
+                }
+                
+                // Calculating CRC32 value for chunk
+                crc.update(chunk);
+                int code = (int) crc.getValue();
+                
+                // Encrypting with session key (sessionKey)
+                cipher.init(Cipher.ENCRYPT_MODE, sessionKey);
+                chunk = cipher.doFinal(chunk);
+                obOut.writeObject(new Chunk(seqNum, chunk, code));
+                seqNum++;
+                
+                // Check Ack from server and check sequence number
+                ackMsg = (AckMessage) obIn.readObject();
+                nxtSeq = ackMsg.getSeq();
+            }
+        }
+        socket.close();
         
     } // End of client
     
@@ -132,7 +246,8 @@ public class FileTransfer {
         // Creating server and client socket
         ServerSocket serverSocker = new ServerSocket(port);
         Socket clientSocket = serverSocker.accept();
-            
+        System.out.printf("Established connection with client %s", clientSocket.getRemoteSocketAddress());
+        
         // Creating client input and output streams
         InputStream is = clientSocket.getInputStream();
         OutputStream os = clientSocket.getOutputStream();
@@ -153,7 +268,7 @@ public class FileTransfer {
             } else if(clientMsg.getType().equals(MessageType.START)) {
                 StartMessage startMsg = (StartMessage) clientMsg;
                 int fileSize = (int)startMsg.getSize();
-                int chunkSize = (int)startMsg.getSize();
+                int chunkSize = (int)startMsg.getChunkSize();
                 numChunks = (int)Math.ceil((double) fileSize / (double) chunkSize);
                 fileName = startMsg.getFile();
                 
@@ -229,7 +344,7 @@ public class FileTransfer {
                     
                     // Last step is to expect next sequence number and send Ack to client
                     nxtSeq++;
-                    obOut.writeObject(nxtSeq);
+                    obOut.writeObject(new AckMessage(nxtSeq));
                 }
                 
                 if(clientChunk.getSeq() == numChunks) {
